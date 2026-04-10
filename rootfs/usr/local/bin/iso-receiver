@@ -455,7 +455,9 @@ transfer_iso() {
                 sleep 1
             done
             wait "$dd_pid"
+            local dd_result=$?
             echo 100
+            exit $dd_result
         ) | dialog --title "Transferindo ISO do Celular" \
             --gauge "\nArquivo: $fname\nTamanho: $total_fmt\n\nTransferindo..." \
             12 60 0
@@ -600,7 +602,7 @@ install_iso_to_disk() {
     fi
 
     local boot_disk
-    boot_disk=$(mount | grep ' / ' | awk '{print $1}' | sed 's/[0-9]*$//')
+    boot_disk=$(mount | grep ' / ' | awk '{print $1}' | sed 's/p\?[0-9]*$//')
     if [ "$target_disk" = "$boot_disk" ]; then
         echo -e "  ${RED}ERRO: Este e o disco do sistema! Operacao cancelada.${NC}"
         wait_for_key
@@ -1243,8 +1245,7 @@ flow_phone_transfer() {
 
 show_main_menu() {
     if [ "$USE_DIALOG" = true ]; then
-        local choice
-        choice=$(dialog --title "ISO Receiver - Menu Principal" \
+        MENU_CHOICE=$(dialog --title "ISO Receiver - Menu Principal" \
             --menu "\nComo deseja obter a ISO?" 16 60 6 \
             1 "Baixar da internet" \
             2 "Receber do celular (USB)" \
@@ -1252,7 +1253,6 @@ show_main_menu() {
             4 "Informacoes do sistema" \
             5 "Desligar" \
             3>&1 1>&2 2>&3)
-        echo "$choice"
         return
     fi
 
