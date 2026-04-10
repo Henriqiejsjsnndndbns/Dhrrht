@@ -361,7 +361,7 @@ find_iso_files() {
     total=$(echo "$iso_files" | wc -l)
 
     if [ "$USE_DIALOG" = true ] && [ "$total" -gt 0 ]; then
-        local dialog_items=""
+        local -a dialog_args=()
         local idx=0
         while IFS= read -r file; do
             idx=$((idx + 1))
@@ -371,13 +371,13 @@ find_iso_files() {
             fsize=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local fsize_fmt
             fsize_fmt=$(format_size "$fsize")
-            dialog_items="$dialog_items $idx \"$fname ($fsize_fmt)\""
+            dialog_args+=("$idx" "$fname ($fsize_fmt)")
         done < /tmp/iso_file_list.txt
 
         local selection
-        selection=$(eval "dialog --title 'Arquivos ISO no Celular' \
+        selection=$(dialog --title 'Arquivos ISO no Celular' \
             --menu 'Selecione o arquivo ISO:' 20 60 10 \
-            $dialog_items" 3>&1 1>&2 2>&3)
+            "${dialog_args[@]}" 3>&1 1>&2 2>&3)
 
         if [ -z "$selection" ]; then
             return 1
@@ -562,6 +562,9 @@ execute_iso() {
         5)
             echo -e "\n  ${GREEN}Obrigado por usar o ISO Receiver!${NC}"
             exit 0
+            ;;
+        "")
+            return 1
             ;;
         *)
             echo -e "  ${RED}Opcao invalida.${NC}"
@@ -806,21 +809,21 @@ check_network() {
 
 show_download_catalog() {
     if [ "$USE_DIALOG" = true ]; then
-        local dialog_items=""
+        local -a dialog_args=()
         local idx=0
         for entry in "${ISO_CATALOG[@]}"; do
             idx=$((idx + 1))
             local name
             name=$(echo "$entry" | cut -d'|' -f1)
-            dialog_items="$dialog_items $idx \"$name\""
+            dialog_args+=("$idx" "$name")
         done
         local custom_idx=$((idx + 1))
-        dialog_items="$dialog_items $custom_idx \"Digitar URL manualmente\""
+        dialog_args+=("$custom_idx" "Digitar URL manualmente")
 
         local selection
-        selection=$(eval "dialog --title 'Catalogo de Sistemas' \
+        selection=$(dialog --title 'Catalogo de Sistemas' \
             --menu '\nEscolha o sistema para baixar:' 22 65 12 \
-            $dialog_items" 3>&1 1>&2 2>&3)
+            "${dialog_args[@]}" 3>&1 1>&2 2>&3)
 
         if [ -z "$selection" ]; then
             return 1
@@ -1058,7 +1061,7 @@ show_local_isos() {
     total=$(echo "$iso_files" | wc -l)
 
     if [ "$USE_DIALOG" = true ]; then
-        local dialog_items=""
+        local -a dialog_args=()
         local idx=0
         while IFS= read -r file; do
             idx=$((idx + 1))
@@ -1068,13 +1071,13 @@ show_local_isos() {
             fsize=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local fsize_fmt
             fsize_fmt=$(format_size "$fsize")
-            dialog_items="$dialog_items $idx \"$fname ($fsize_fmt)\""
+            dialog_args+=("$idx" "$fname ($fsize_fmt)")
         done < /tmp/local_iso_list.txt
 
         local selection
-        selection=$(eval "dialog --title 'ISOs Disponiveis' \
+        selection=$(dialog --title 'ISOs Disponiveis' \
             --menu '\nSelecione uma ISO:' 18 60 10 \
-            $dialog_items" 3>&1 1>&2 2>&3)
+            "${dialog_args[@]}" 3>&1 1>&2 2>&3)
 
         if [ -z "$selection" ]; then
             return 1
