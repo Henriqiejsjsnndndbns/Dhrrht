@@ -43,7 +43,7 @@ check_deps() {
     log_step "Verificando dependencias..."
     local missing=""
 
-    for cmd in wget tar dd mkfs.ext4 syslinux mksquashfs; do
+    for cmd in wget tar dd mkfs.vfat parted losetup syslinux cpio gzip; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             missing="$missing $cmd"
         fi
@@ -56,12 +56,12 @@ check_deps() {
         if command -v apt-get >/dev/null 2>&1; then
             apt-get update -qq
             apt-get install -y -qq wget tar syslinux syslinux-utils \
-                squashfs-tools dosfstools e2fsprogs kmod cpio gzip
+                parted dosfstools e2fsprogs kmod cpio gzip
         elif command -v apk >/dev/null 2>&1; then
-            apk add wget tar syslinux squashfs-tools dosfstools \
+            apk add wget tar syslinux parted dosfstools \
                 e2fsprogs kmod cpio gzip
         elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y wget tar syslinux squashfs-tools dosfstools \
+            dnf install -y wget tar syslinux parted dosfstools \
                 e2fsprogs kmod cpio gzip
         else
             log_error "Gerenciador de pacotes nao reconhecido. Instale manualmente: $missing"
@@ -290,7 +290,7 @@ create_usb_image() {
     cp "${BUILD_DIR}/initramfs.img" "${mnt_dir}/boot/"
 
     # Install syslinux MBR
-    if [ -f "${syslinux_dir}/mbr.bin" ]; then
+    if [ -n "$syslinux_dir" ] && [ -f "${syslinux_dir}/mbr.bin" ]; then
         dd if="${syslinux_dir}/mbr.bin" of="$loop_dev" bs=440 count=1 conv=notrunc status=none
     elif [ -f "/usr/lib/syslinux/mbr/mbr.bin" ]; then
         dd if="/usr/lib/syslinux/mbr/mbr.bin" of="$loop_dev" bs=440 count=1 conv=notrunc status=none
