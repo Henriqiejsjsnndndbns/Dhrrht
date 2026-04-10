@@ -189,26 +189,69 @@ EOF
 copy_kernel() {
     log_step "Copiando kernel do sistema host..."
 
-    local kernel_version=$(uname -r)
-    local kernel_src="/boot/vmlinuz-${kernel_version}"
+    local kernel_version
+    kernel_version=$(uname -r)
+    local kernel_found=false
 
-    if [ -f "$kernel_src" ]; then
-        cp "$kernel_src" "${ROOTFS_DIR}/boot/vmlinuz"
-        log_info "Kernel copiado: $kernel_version"
-    elif [ -f "/boot/vmlinuz" ]; then
-        cp "/boot/vmlinuz" "${ROOTFS_DIR}/boot/vmlinuz"
-        log_info "Kernel copiado: vmlinuz"
-    else
-        log_warn "Kernel nao encontrado. Voce precisara adicionar manualmente."
-        log_warn "Copie seu vmlinuz para output/boot/vmlinuz"
+    # Search for kernel in multiple locations (ordered by preference)
+    local kernel_paths=(
+        "/boot/vmlinuz-${kernel_version}"
+        "/boot/vmlinuz"
+        "/boot/bzImage-${kernel_version}"
+        "/boot/bzImage"
+    )
+
+    # Also search for any vmlinuz/bzImage in /boot
+    for kpath in "${kernel_paths[@]}"; do
+        if [ -f "$kpath" ]; then
+            cp "$kpath" "${ROOTFS_DIR}/boot/vmlinuz"
+            log_info "Kernel copiado: $kpath"
+            kernel_found=true
+            break
+        fi
+    done
+
+    # Fallback: find any kernel image in /boot
+    if [ "$kernel_found" = false ]; then
+        local found_kernel
+        found_kernel=$(find /boot -maxdepth 1 -name "vmlinuz*" -o -name "bzImage*" 2>/dev/null | sort -V | tail -1)
+        if [ -n "$found_kernel" ] && [ -f "$found_kernel" ]; then
+            cp "$found_kernel" "${ROOTFS_DIR}/boot/vmlinuz"
+            log_info "Kernel copiado: $found_kernel"
+            kernel_found=true
+        fi
     fi
 
-    # Copy modules if available
+    if [ "$kernel_found" = false ]; then
+        log_warn "Kernel nao encontrado em /boot."
+        log_warn "Copie seu vmlinuz para ${ROOTFS_DIR}/boot/vmlinuz antes de criar a imagem."
+        log_warn "Locais verificados: ${kernel_paths[*]}"
+    fi
+
+    # Copy only essential kernel modules to save space
     if [ -d "/lib/modules/${kernel_version}" ]; then
-        mkdir -p "${ROOTFS_DIR}/lib/modules/"
-        cp -a "/lib/modules/${kernel_version}" "${ROOTFS_DIR}/lib/modules/" 2>/dev/null || true
-        # Only copy essential modules to save space
-        log_info "Modulos do kernel copiados."
+        mkdir -p "${ROOTFS_DIR}/lib/modules/${kernel_version}/kernel/drivers"
+        # Copy USB, filesystem, and storage modules (essential for ISO Receiver)
+        for mod_dir in usb storage fuse block fs; do
+            local src_dir="/lib/modules/${kernel_version}/kernel/drivers/${mod_dir}"
+            if [ -d "$src_dir" ]; then
+                cp -a "$src_dir" "${ROOTFS_DIR}/lib/modules/${kernel_version}/kernel/drivers/" 2>/dev/null || true
+            fi
+        done
+        # Copy filesystem modules
+        if [ -d "/lib/modules/${kernel_version}/kernel/fs" ]; then
+            mkdir -p "${ROOTFS_DIR}/lib/modules/${kernel_version}/kernel/"
+            cp -a "/lib/modules/${kernel_version}/kernel/fs" "${ROOTFS_DIR}/lib/modules/${kernel_version}/kernel/" 2>/dev/null || true
+        fi
+        # Copy modules.dep and related files
+        for f in modules.dep modules.dep.bin modules.alias modules.alias.bin modules.order modules.builtin; do
+            if [ -f "/lib/modules/${kernel_version}/$f" ]; then
+                cp "/lib/modules/${kernel_version}/$f" "${ROOTFS_DIR}/lib/modules/${kernel_version}/" 2>/dev/null || true
+            fi
+        done
+        log_info "Modulos essenciais do kernel copiados (USB, storage, fs)."
+    else
+        log_warn "Modulos do kernel nao encontrados em /lib/modules/${kernel_version}"
     fi
 }
 
@@ -314,7 +357,8 @@ create_usb_image() {
     # Clear the trap after successful cleanup
     trap - EXIT ERR
 
-    local final_size=$(du -sh "$IMG_FILE" | awk '{print $1}')
+    local final_size
+    final_size=$(du -sh "$IMG_FILE" | awk '{print $1}')
     log_info "Imagem criada: $IMG_FILE ($final_size)"
 }
 
