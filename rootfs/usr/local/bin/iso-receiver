@@ -1,0 +1,620 @@
+#!/bin/bash
+# ISO Receiver - Main application script
+# Receives ISO files from a connected phone via USB (MTP)
+# and allows installation/execution on the notebook
+
+export TERM=linux
+export LANG=pt_BR.UTF-8
+
+# Colors for terminal UI
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+
+# Target directory for received ISOs
+ISO_DIR="/tmp/iso_received"
+MOUNT_DIR="/tmp/phone_mtp"
+LOG_FILE="/tmp/iso-receiver.log"
+
+mkdir -p "$ISO_DIR" "$MOUNT_DIR"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+clear_screen() {
+    clear
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${WHITE}${BOLD}        ISO RECEIVER - Sistema de Transferencia          ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}║${WHITE}        Receba ISOs do celular via cabo USB              ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+show_progress() {
+    # $1 = current bytes, $2 = total bytes, $3 = start time
+    local current=$1
+    local total=$2
+    local start_time=$3
+    local now=$(date +%s)
+    local elapsed=$((now - start_time))
+
+    if [ "$total" -eq 0 ]; then
+        return
+    fi
+
+    local percent=$((current * 100 / total))
+    local bar_width=40
+    local filled=$((percent * bar_width / 100))
+    local empty=$((bar_width - filled))
+
+    # Calculate speed and ETA
+    local speed=0
+    local eta="--:--"
+    if [ "$elapsed" -gt 0 ]; then
+        speed=$((current / elapsed))
+        if [ "$speed" -gt 0 ]; then
+            local remaining=$(( (total - current) / speed ))
+            local eta_min=$((remaining / 60))
+            local eta_sec=$((remaining % 60))
+            eta=$(printf "%02d:%02d" "$eta_min" "$eta_sec")
+        fi
+    fi
+
+    # Format sizes
+    local current_mb=$(awk "BEGIN {printf \"%.1f\", $current / 1048576}")
+    local total_mb=$(awk "BEGIN {printf \"%.1f\", $total / 1048576}")
+    local speed_mb=$(awk "BEGIN {printf \"%.1f\", $speed / 1048576}")
+
+    # Build progress bar
+    local bar=""
+    local i=0
+    while [ "$i" -lt "$filled" ]; do
+        bar="${bar}█"
+        i=$((i + 1))
+    done
+    while [ "$i" -lt "$bar_width" ]; do
+        bar="${bar}░"
+        i=$((i + 1))
+    done
+
+    # Display
+    printf "\r  ${GREEN}[${bar}]${NC} ${WHITE}${percent}%%${NC}"
+    printf "  ${CYAN}${current_mb}MB/${total_mb}MB${NC}"
+    printf "  ${YELLOW}${speed_mb} MB/s${NC}"
+    printf "  ${WHITE}ETA: ${eta}${NC}   "
+}
+
+detect_phone() {
+    clear_screen
+    echo -e "  ${YELLOW}Aguardando conexao do celular via USB...${NC}"
+    echo ""
+    echo -e "  ${WHITE}Instrucoes:${NC}"
+    echo -e "  ${WHITE}1.${NC} Conecte o celular ao notebook com o cabo USB"
+    echo -e "  ${WHITE}2.${NC} No celular, selecione '${GREEN}Transferencia de arquivos${NC}' (MTP)"
+    echo -e "  ${WHITE}3.${NC} Aguarde a deteccao automatica"
+    echo ""
+    echo -e "  ${BLUE}[Pressione Ctrl+C para cancelar]${NC}"
+    echo ""
+
+    local attempts=0
+    local max_attempts=300  # 5 minutes timeout
+
+    while [ "$attempts" -lt "$max_attempts" ]; do
+        # Check for MTP devices
+        if command -v jmtpfs >/dev/null 2>&1; then
+            if jmtpfs -l 2>/dev/null | grep -qi "device"; then
+                echo -e "\n  ${GREEN}✓ Celular detectado via MTP!${NC}"
+                log "Phone detected via MTP"
+                return 0
+            fi
+        fi
+
+        # Check for USB mass storage
+        local usb_devs=$(ls /dev/sd* 2>/dev/null | grep -v "$(mount | grep ' / ' | awk '{print $1}' | sed 's/[0-9]*$//')")
+        if [ -n "$usb_devs" ]; then
+            # Check if any new device appeared
+            for dev in $usb_devs; do
+                if [ -b "$dev" ] && ! mount | grep -q "$dev"; then
+                    echo -e "\n  ${GREEN}✓ Dispositivo USB detectado: $dev${NC}"
+                    log "USB device detected: $dev"
+                    return 0
+                fi
+            done
+        fi
+
+        # Check for PTP/MTP via simple-mtpfs
+        if command -v simple-mtpfs >/dev/null 2>&1; then
+            if simple-mtpfs -l 2>/dev/null | grep -q .; then
+                echo -e "\n  ${GREEN}✓ Celular detectado via MTP!${NC}"
+                log "Phone detected via simple-mtpfs"
+                return 0
+            fi
+        fi
+
+        # Also check lsusb for any phone-like devices
+        if command -v lsusb >/dev/null 2>&1; then
+            if lsusb 2>/dev/null | grep -iE "samsung|xiaomi|motorola|huawei|lg|sony|oneplus|google|pixel|oppo|vivo|realme|phone|android|mtp" >/dev/null; then
+                echo -e "\n  ${GREEN}✓ Celular detectado via USB!${NC}"
+                log "Phone detected via lsusb"
+                return 0
+            fi
+        fi
+
+        sleep 1
+        attempts=$((attempts + 1))
+
+        # Show waiting animation
+        local spinner="/-\\|"
+        local spin_char=$(echo "$spinner" | cut -c$(( (attempts % 4) + 1 )))
+        printf "\r  ${YELLOW}[${spin_char}] Procurando celular... (${attempts}s)${NC}   "
+    done
+
+    echo -e "\n  ${RED}✗ Tempo esgotado. Nenhum celular detectado.${NC}"
+    log "Phone detection timeout"
+    return 1
+}
+
+mount_phone() {
+    echo -e "\n  ${YELLOW}Montando armazenamento do celular...${NC}"
+
+    # Try jmtpfs first
+    if command -v jmtpfs >/dev/null 2>&1; then
+        if jmtpfs "$MOUNT_DIR" 2>/dev/null; then
+            echo -e "  ${GREEN}✓ Celular montado com sucesso (jmtpfs)${NC}"
+            log "Phone mounted via jmtpfs"
+            return 0
+        fi
+    fi
+
+    # Try simple-mtpfs
+    if command -v simple-mtpfs >/dev/null 2>&1; then
+        if simple-mtpfs "$MOUNT_DIR" 2>/dev/null; then
+            echo -e "  ${GREEN}✓ Celular montado com sucesso (simple-mtpfs)${NC}"
+            log "Phone mounted via simple-mtpfs"
+            return 0
+        fi
+    fi
+
+    # Try gio/gvfs mount
+    if command -v gio >/dev/null 2>&1; then
+        gio mount -d /dev/bus/usb/* 2>/dev/null
+        local gvfs_mtp=$(ls /run/user/*/gvfs/mtp* 2>/dev/null | head -1)
+        if [ -n "$gvfs_mtp" ]; then
+            MOUNT_DIR="$gvfs_mtp"
+            echo -e "  ${GREEN}✓ Celular montado com sucesso (gvfs)${NC}"
+            log "Phone mounted via gvfs at $MOUNT_DIR"
+            return 0
+        fi
+    fi
+
+    echo -e "  ${RED}✗ Nao foi possivel montar o celular.${NC}"
+    echo -e "  ${YELLOW}Verifique se o modo 'Transferencia de arquivos' esta ativo no celular.${NC}"
+    log "Failed to mount phone"
+    return 1
+}
+
+find_iso_files() {
+    echo -e "\n  ${YELLOW}Procurando arquivos ISO no celular...${NC}"
+    echo ""
+
+    # Search for .iso files
+    local iso_files=$(find "$MOUNT_DIR" -iname "*.iso" -type f 2>/dev/null)
+
+    if [ -z "$iso_files" ]; then
+        echo -e "  ${RED}Nenhum arquivo ISO encontrado no celular.${NC}"
+        echo -e "  ${WHITE}Certifique-se de que o arquivo .iso esta no armazenamento do celular.${NC}"
+        log "No ISO files found"
+        return 1
+    fi
+
+    echo -e "  ${GREEN}Arquivos ISO encontrados:${NC}"
+    echo ""
+
+    local count=0
+    local file_list=""
+    echo "$iso_files" | while IFS= read -r file; do
+        count=$((count + 1))
+        local fname=$(basename "$file")
+        local fsize=$(stat -c%s "$file" 2>/dev/null || echo "0")
+        local fsize_mb=$(awk "BEGIN {printf \"%.1f\", $fsize / 1048576}")
+        echo -e "  ${WHITE}[$count]${NC} ${CYAN}$fname${NC} ${YELLOW}(${fsize_mb} MB)${NC}"
+    done
+
+    # Store file list for selection
+    echo "$iso_files" > /tmp/iso_file_list.txt
+    local total=$(echo "$iso_files" | wc -l)
+
+    echo ""
+    echo -e "  ${WHITE}Digite o numero do arquivo ISO desejado [1-$total]: ${NC}"
+    read -r selection
+
+    if [ -z "$selection" ] || [ "$selection" -lt 1 ] || [ "$selection" -gt "$total" ] 2>/dev/null; then
+        echo -e "  ${RED}Selecao invalida.${NC}"
+        return 1
+    fi
+
+    SELECTED_ISO=$(sed -n "${selection}p" /tmp/iso_file_list.txt)
+    log "Selected ISO: $SELECTED_ISO"
+    return 0
+}
+
+transfer_iso() {
+    local source="$1"
+    local fname=$(basename "$source")
+    local dest="$ISO_DIR/$fname"
+
+    local total_size=$(stat -c%s "$source" 2>/dev/null || echo "0")
+    local total_mb=$(awk "BEGIN {printf \"%.1f\", $total_size / 1048576}")
+
+    clear_screen
+    echo -e "  ${WHITE}Transferindo ISO do celular...${NC}"
+    echo ""
+    echo -e "  ${CYAN}Arquivo:${NC} $fname"
+    echo -e "  ${CYAN}Tamanho:${NC} ${total_mb} MB"
+    echo ""
+
+    local start_time=$(date +%s)
+
+    # Use dd with progress tracking
+    if [ "$total_size" -gt 0 ]; then
+        # Copy with progress using dd and monitoring
+        dd if="$source" of="$dest" bs=1M 2>/dev/null &
+        local dd_pid=$!
+
+        while kill -0 "$dd_pid" 2>/dev/null; do
+            if [ -f "$dest" ]; then
+                local current_size=$(stat -c%s "$dest" 2>/dev/null || echo "0")
+                show_progress "$current_size" "$total_size" "$start_time"
+            fi
+            sleep 0.5
+        done
+
+        wait "$dd_pid"
+        local exit_code=$?
+
+        # Show 100% completion
+        show_progress "$total_size" "$total_size" "$start_time"
+        echo ""
+
+        if [ "$exit_code" -eq 0 ]; then
+            local end_time=$(date +%s)
+            local total_time=$((end_time - start_time))
+            local minutes=$((total_time / 60))
+            local seconds=$((total_time % 60))
+
+            echo ""
+            echo -e "  ${GREEN}╔══════════════════════════════════════════╗${NC}"
+            echo -e "  ${GREEN}║  ✓ Transferencia concluida com sucesso! ║${NC}"
+            echo -e "  ${GREEN}╚══════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "  ${WHITE}Tempo total:${NC} ${minutes}m ${seconds}s"
+            echo -e "  ${WHITE}Arquivo salvo em:${NC} $dest"
+            log "Transfer completed: $fname ($total_mb MB) in ${minutes}m${seconds}s"
+            return 0
+        else
+            echo -e "\n  ${RED}✗ Erro na transferencia!${NC}"
+            log "Transfer failed for $fname"
+            return 1
+        fi
+    else
+        # Fallback: simple copy
+        cp "$source" "$dest"
+        if [ $? -eq 0 ]; then
+            echo -e "  ${GREEN}✓ Transferencia concluida!${NC}"
+            return 0
+        else
+            echo -e "  ${RED}✗ Erro na transferencia!${NC}"
+            return 1
+        fi
+    fi
+}
+
+execute_iso() {
+    local iso_file="$1"
+    local fname=$(basename "$iso_file")
+
+    echo ""
+    echo -e "  ${WHITE}O que deseja fazer com a ISO?${NC}"
+    echo ""
+    echo -e "  ${WHITE}[1]${NC} ${CYAN}Instalar no disco do notebook${NC} (gravar ISO no HD/SSD)"
+    echo -e "  ${WHITE}[2]${NC} ${CYAN}Iniciar sistema da ISO${NC} (kexec - boot direto)"
+    echo -e "  ${WHITE}[3]${NC} ${CYAN}Montar e explorar${NC} (ver conteudo da ISO)"
+    echo -e "  ${WHITE}[4]${NC} ${CYAN}Transferir outra ISO${NC}"
+    echo -e "  ${WHITE}[5]${NC} ${CYAN}Sair${NC}"
+    echo ""
+    echo -e "  ${WHITE}Escolha [1-5]: ${NC}"
+    read -r choice
+
+    case "$choice" in
+        1)
+            install_iso_to_disk "$iso_file"
+            ;;
+        2)
+            boot_from_iso "$iso_file"
+            ;;
+        3)
+            explore_iso "$iso_file"
+            ;;
+        4)
+            return 1  # Signal to go back to transfer
+            ;;
+        5)
+            echo -e "\n  ${GREEN}Obrigado por usar o ISO Receiver!${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "  ${RED}Opcao invalida.${NC}"
+            sleep 2
+            execute_iso "$iso_file"
+            ;;
+    esac
+}
+
+install_iso_to_disk() {
+    local iso_file="$1"
+
+    clear_screen
+    echo -e "  ${RED}${BOLD}ATENCAO: Esta operacao vai APAGAR todos os dados do disco!${NC}"
+    echo ""
+
+    # List available disks
+    echo -e "  ${WHITE}Discos disponiveis:${NC}"
+    echo ""
+    lsblk -d -n -o NAME,SIZE,MODEL 2>/dev/null | grep -v "loop\|sr\|ram" | while read -r line; do
+        local disk_name=$(echo "$line" | awk '{print $1}')
+        local disk_size=$(echo "$line" | awk '{print $2}')
+        local disk_model=$(echo "$line" | awk '{$1=""; $2=""; print $0}' | sed 's/^ *//')
+        echo -e "  ${CYAN}/dev/$disk_name${NC} - ${WHITE}$disk_size${NC} $disk_model"
+    done
+
+    echo ""
+    echo -e "  ${WHITE}Digite o disco de destino (ex: /dev/sda): ${NC}"
+    read -r target_disk
+
+    if [ ! -b "$target_disk" ]; then
+        echo -e "  ${RED}Disco invalido: $target_disk${NC}"
+        sleep 2
+        return 1
+    fi
+
+    echo ""
+    echo -e "  ${RED}Tem CERTEZA que deseja gravar em $target_disk?${NC}"
+    echo -e "  ${RED}TODOS OS DADOS SERAO PERDIDOS!${NC}"
+    echo -e "  ${WHITE}Digite 'SIM' para confirmar: ${NC}"
+    read -r confirm
+
+    if [ "$confirm" != "SIM" ]; then
+        echo -e "  ${YELLOW}Operacao cancelada.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    local total_size=$(stat -c%s "$iso_file" 2>/dev/null || echo "0")
+    local start_time=$(date +%s)
+
+    echo ""
+    echo -e "  ${YELLOW}Gravando ISO no disco...${NC}"
+    echo ""
+
+    # Use dd to write ISO to disk
+    dd if="$iso_file" of="$target_disk" bs=4M status=none 2>/dev/null &
+    local dd_pid=$!
+
+    while kill -0 "$dd_pid" 2>/dev/null; do
+        # Try to get progress from /proc
+        local written=0
+        if [ -f "/proc/$dd_pid/io" ]; then
+            written=$(grep "write_bytes" "/proc/$dd_pid/io" 2>/dev/null | awk '{print $2}')
+        fi
+        if [ -n "$written" ] && [ "$written" -gt 0 ] 2>/dev/null; then
+            show_progress "$written" "$total_size" "$start_time"
+        fi
+        sleep 1
+    done
+
+    wait "$dd_pid"
+
+    if [ $? -eq 0 ]; then
+        sync
+        show_progress "$total_size" "$total_size" "$start_time"
+        echo ""
+        echo ""
+        echo -e "  ${GREEN}✓ ISO gravada com sucesso no disco!${NC}"
+        echo -e "  ${WHITE}Reinicie o notebook para usar o novo sistema.${NC}"
+        log "ISO installed to $target_disk"
+    else
+        echo -e "\n  ${RED}✗ Erro ao gravar a ISO!${NC}"
+        log "Failed to install ISO to $target_disk"
+    fi
+
+    echo ""
+    echo -e "  ${WHITE}Pressione ENTER para continuar...${NC}"
+    read -r
+}
+
+boot_from_iso() {
+    local iso_file="$1"
+
+    clear_screen
+    echo -e "  ${YELLOW}Preparando para iniciar sistema da ISO...${NC}"
+    echo ""
+
+    # Mount ISO
+    local iso_mount="/tmp/iso_mount"
+    mkdir -p "$iso_mount"
+    mount -o loop "$iso_file" "$iso_mount" 2>/dev/null
+
+    if [ $? -ne 0 ]; then
+        echo -e "  ${RED}Erro ao montar a ISO.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    # Try to find kernel and initrd
+    local kernel=$(find "$iso_mount" -name "vmlinuz*" -o -name "bzImage" 2>/dev/null | head -1)
+    local initrd=$(find "$iso_mount" -name "initrd*" -o -name "initramfs*" 2>/dev/null | head -1)
+
+    if [ -z "$kernel" ]; then
+        echo -e "  ${RED}Kernel nao encontrado na ISO.${NC}"
+        echo -e "  ${WHITE}Use a opcao 'Instalar no disco' em vez disso.${NC}"
+        umount "$iso_mount" 2>/dev/null
+        sleep 3
+        return 1
+    fi
+
+    echo -e "  ${GREEN}Kernel encontrado:${NC} $(basename "$kernel")"
+    if [ -n "$initrd" ]; then
+        echo -e "  ${GREEN}Initrd encontrado:${NC} $(basename "$initrd")"
+    fi
+
+    echo ""
+    echo -e "  ${RED}O sistema atual sera encerrado e o novo sistema sera iniciado.${NC}"
+    echo -e "  ${WHITE}Deseja continuar? [s/N]: ${NC}"
+    read -r confirm
+
+    if [ "$confirm" = "s" ] || [ "$confirm" = "S" ]; then
+        echo -e "\n  ${YELLOW}Iniciando novo sistema...${NC}"
+        log "Booting from ISO via kexec"
+
+        if [ -n "$initrd" ]; then
+            kexec -l "$kernel" --initrd="$initrd" 2>/dev/null
+        else
+            kexec -l "$kernel" 2>/dev/null
+        fi
+
+        if [ $? -eq 0 ]; then
+            kexec -e
+        else
+            echo -e "  ${RED}kexec nao disponivel ou falhou.${NC}"
+            echo -e "  ${WHITE}Use a opcao 'Instalar no disco' em vez disso.${NC}"
+        fi
+    fi
+
+    umount "$iso_mount" 2>/dev/null
+    echo -e "  ${WHITE}Pressione ENTER para continuar...${NC}"
+    read -r
+}
+
+explore_iso() {
+    local iso_file="$1"
+
+    clear_screen
+    echo -e "  ${YELLOW}Montando ISO para exploracao...${NC}"
+
+    local iso_mount="/tmp/iso_mount"
+    mkdir -p "$iso_mount"
+    mount -o loop "$iso_file" "$iso_mount" 2>/dev/null
+
+    if [ $? -ne 0 ]; then
+        echo -e "  ${RED}Erro ao montar a ISO.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    echo ""
+    echo -e "  ${GREEN}Conteudo da ISO:${NC}"
+    echo ""
+    ls -la "$iso_mount" 2>/dev/null | while read -r line; do
+        echo -e "  ${WHITE}$line${NC}"
+    done
+
+    echo ""
+    echo -e "  ${WHITE}ISO montada em: $iso_mount${NC}"
+    echo -e "  ${WHITE}Pressione ENTER para desmontar e voltar...${NC}"
+    read -r
+
+    umount "$iso_mount" 2>/dev/null
+}
+
+unmount_phone() {
+    if [ -n "$MOUNT_DIR" ]; then
+        fusermount -u "$MOUNT_DIR" 2>/dev/null
+        umount "$MOUNT_DIR" 2>/dev/null
+    fi
+}
+
+# ======================
+# Main Program Flow
+# ======================
+
+main() {
+    clear_screen
+    echo -e "  ${WHITE}Bem-vindo ao ISO Receiver!${NC}"
+    echo ""
+    echo -e "  ${WHITE}Este sistema permite receber arquivos ISO${NC}"
+    echo -e "  ${WHITE}do seu celular via cabo USB e instalar no notebook.${NC}"
+    echo ""
+    echo -e "  ${WHITE}Pressione ENTER para iniciar...${NC}"
+    read -r
+
+    while true; do
+        # Step 1: Detect phone
+        if ! detect_phone; then
+            echo -e "\n  ${WHITE}Tentar novamente? [s/N]: ${NC}"
+            read -r retry
+            if [ "$retry" = "s" ] || [ "$retry" = "S" ]; then
+                continue
+            else
+                break
+            fi
+        fi
+
+        # Step 2: Mount phone storage
+        if ! mount_phone; then
+            echo -e "\n  ${WHITE}Tentar novamente? [s/N]: ${NC}"
+            read -r retry
+            if [ "$retry" = "s" ] || [ "$retry" = "S" ]; then
+                continue
+            else
+                break
+            fi
+        fi
+
+        # Step 3: Find and select ISO
+        if ! find_iso_files; then
+            unmount_phone
+            echo -e "\n  ${WHITE}Tentar novamente? [s/N]: ${NC}"
+            read -r retry
+            if [ "$retry" = "s" ] || [ "$retry" = "S" ]; then
+                continue
+            else
+                break
+            fi
+        fi
+
+        # Step 4: Transfer ISO
+        if ! transfer_iso "$SELECTED_ISO"; then
+            unmount_phone
+            continue
+        fi
+
+        unmount_phone
+
+        # Step 5: Execute/Install ISO
+        local received_iso="$ISO_DIR/$(basename "$SELECTED_ISO")"
+        while true; do
+            if ! execute_iso "$received_iso"; then
+                break  # Go back to transfer
+            fi
+        done
+    done
+
+    echo ""
+    echo -e "  ${GREEN}Obrigado por usar o ISO Receiver!${NC}"
+    echo -e "  ${WHITE}Pressione ENTER para desligar...${NC}"
+    read -r
+    poweroff 2>/dev/null || true
+}
+
+# Trap cleanup
+trap 'unmount_phone; echo ""; echo "Saindo..."; exit 0' INT TERM
+
+# Run main
+main

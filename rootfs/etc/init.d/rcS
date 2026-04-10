@@ -1,0 +1,48 @@
+#!/bin/sh
+# Init script for ISO Receiver bootable system
+# This runs on boot to set up the environment and launch the application
+
+# Mount essential filesystems
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /dev/shm
+mount -t tmpfs tmpfs /tmp
+mount -t tmpfs tmpfs /run
+
+# Set hostname
+hostname iso-receiver
+
+# Set up console
+echo "ISO Receiver System - Iniciando..." > /dev/console
+
+# Configure kernel messages
+dmesg -n 1
+
+# Load USB modules
+modprobe usb-storage 2>/dev/null
+modprobe usb_f_mtp 2>/dev/null
+modprobe fuse 2>/dev/null
+modprobe loop 2>/dev/null
+modprobe vfat 2>/dev/null
+modprobe ntfs 2>/dev/null
+modprobe ext4 2>/dev/null
+
+# Start udev or mdev for device detection
+if command -v udevd >/dev/null 2>&1; then
+    udevd --daemon
+    udevadm trigger
+    udevadm settle
+elif command -v mdev >/dev/null 2>&1; then
+    echo /sbin/mdev > /proc/sys/kernel/hotplug
+    mdev -s
+fi
+
+# Set up networking (optional, for future use)
+ifconfig lo 127.0.0.1 up 2>/dev/null
+
+# Clear screen and launch main application
+clear
+exec /usr/local/bin/iso-receiver
