@@ -1,13 +1,13 @@
-# ISO Receiver - Sistema de Transferencia de ISO via Celular
+# ISO Receiver - Sistema de Transferencia e Download de ISOs
 
-Sistema bootavel para pendrive USB que permite receber arquivos ISO do celular via cabo USB e instalar no notebook.
+Sistema bootavel para pendrive USB que permite **baixar ISOs da internet** ou **receber do celular via cabo USB** e instalar no notebook.
 
 ## Como Funciona
 
 1. **Boot pelo Pendrive**: O notebook inicia pelo pendrive com um sistema Linux minimo (~28MB)
-2. **Conexao do Celular**: O sistema detecta automaticamente o celular conectado via cabo USB
-3. **Transferencia**: Voce seleciona a ISO no celular e o sistema transfere para o notebook
-4. **Instalacao**: Apos a transferencia, voce pode instalar a ISO no disco do notebook ou iniciar diretamente
+2. **Menu Principal**: Escolha entre baixar da internet ou receber do celular
+3. **Download/Transferencia**: Baixe um sistema (Ubuntu, Mint, etc.) ou transfira do celular com barra de progresso
+4. **Instalacao**: Apos obter a ISO, voce pode instalar no disco do notebook ou iniciar diretamente
 
 ## Requisitos
 

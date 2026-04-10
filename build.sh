@@ -74,7 +74,7 @@ check_deps() {
 
 prepare_dirs() {
     log_step "Preparando diretorios..."
-    rm -rf "$BUILD_DIR"
+    rm -rf "$ROOTFS_DIR"
     mkdir -p "$ROOTFS_DIR" "$OUTPUT_DIR"
     mkdir -p "${ROOTFS_DIR}"/{bin,sbin,usr/bin,usr/sbin,usr/local/bin}
     mkdir -p "${ROOTFS_DIR}"/{etc/init.d,proc,sys,dev,tmp,run,mnt}
@@ -115,6 +115,7 @@ install_packages() {
         chroot "$ROOTFS_DIR" /bin/sh -c "
             apk update --quiet
             apk add --quiet --no-cache \
+                bash \
                 busybox \
                 busybox-extras \
                 fuse \
@@ -130,7 +131,9 @@ install_packages() {
                 findutils \
                 grep \
                 sed \
-                gawk
+                gawk \
+                wget \
+                curl
         " 2>/dev/null || log_warn "Alguns pacotes podem nao ter sido instalados."
 
         umount "${ROOTFS_DIR}/proc" 2>/dev/null || true
@@ -232,8 +235,17 @@ create_usb_image() {
     parted -s "$IMG_FILE" set 1 boot on
 
     # Set up loop device
-    local loop_dev=$(losetup --find --show --partscan "$IMG_FILE")
+    local loop_dev
+    loop_dev=$(losetup --find --show --partscan "$IMG_FILE")
     local part_dev="${loop_dev}p1"
+
+    # Trap to cleanup loop device and mount on failure
+    local mnt_dir="${BUILD_DIR}/mnt"
+    cleanup_usb_image() {
+        umount "$mnt_dir" 2>/dev/null || true
+        losetup -d "$loop_dev" 2>/dev/null || true
+    }
+    trap cleanup_usb_image EXIT ERR
 
     # Wait for partition device
     sleep 1
@@ -246,7 +258,6 @@ create_usb_image() {
     mkfs.vfat -F 32 "$part_dev"
 
     # Mount and copy files
-    local mnt_dir="${BUILD_DIR}/mnt"
     mkdir -p "$mnt_dir"
     mount "$part_dev" "$mnt_dir"
 
@@ -299,6 +310,9 @@ create_usb_image() {
     # Cleanup
     umount "$mnt_dir"
     losetup -d "$loop_dev"
+
+    # Clear the trap after successful cleanup
+    trap - EXIT ERR
 
     local final_size=$(du -sh "$IMG_FILE" | awk '{print $1}')
     log_info "Imagem criada: $IMG_FILE ($final_size)"

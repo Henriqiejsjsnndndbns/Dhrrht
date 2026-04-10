@@ -1,6 +1,6 @@
 #!/bin/bash
 # ISO Receiver - Main application script
-# Receives ISO files from a connected phone via USB (MTP)
+# Downloads ISO files from the internet OR receives from phone via USB (MTP)
 # and allows installation/execution on the notebook
 
 export TERM=linux
@@ -23,6 +23,23 @@ LOG_FILE="/tmp/iso-receiver.log"
 
 mkdir -p "$ISO_DIR" "$MOUNT_DIR"
 
+# ISO Download Catalog - Popular Linux Distributions
+# Each entry: "Name|URL|Size(approx)"
+ISO_CATALOG=(
+    "Tiny Core Linux 15 (23MB)|http://tinycorelinux.net/15.x/x86/release/TinyCore-current.iso|23M"
+    "Tiny Core Linux 15 - 64bit (23MB)|http://tinycorelinux.net/15.x/x86_64/release/TinyCorePure64-current.iso|23M"
+    "Slitaz Rolling (55MB)|https://mirror.slitaz.org/iso/rolling/slitaz-rolling-core.iso|55M"
+    "Puppy Linux Fossapup (400MB)|https://distro.ibiblio.org/puppylinux/puppy-fossa/fossapup64-9.5.iso|400M"
+    "Alpine Linux Mini 3.19 (200MB)|https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-standard-3.19.0-x86_64.iso|200M"
+    "Linux Mint 21.3 Cinnamon (2.7GB)|https://mirrors.kernel.org/linuxmint/stable/21.3/linuxmint-21.3-cinnamon-64bit.iso|2700M"
+    "Ubuntu 24.04 LTS Desktop (5.7GB)|https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso|5700M"
+    "Ubuntu 24.04 LTS Server (2.6GB)|https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso|2600M"
+    "Debian 12 Netinst (630MB)|https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.5.0-amd64-netinst.iso|630M"
+    "Fedora 40 Workstation (2.1GB)|https://download.fedoraproject.org/pub/fedora/linux/releases/40/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-40-1.14.iso|2100M"
+    "Arch Linux (latest, ~800MB)|https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso|800M"
+    "Kali Linux Light (3GB)|https://cdimage.kali.org/kali-2024.1/kali-linux-2024.1-installer-amd64.iso|3000M"
+)
+
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
 }
@@ -32,7 +49,7 @@ clear_screen() {
     echo ""
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${WHITE}${BOLD}        ISO RECEIVER - Sistema de Transferencia          ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}║${WHITE}        Receba ISOs do celular via cabo USB              ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}║${WHITE}      Baixe ou receba ISOs e instale no notebook          ${NC}${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -235,7 +252,7 @@ find_iso_files() {
     echo -e "  ${WHITE}Digite o numero do arquivo ISO desejado [1-$total]: ${NC}"
     read -r selection
 
-    if [ -z "$selection" ] || [ "$selection" -lt 1 ] || [ "$selection" -gt "$total" ] 2>/dev/null; then
+    if [ -z "$selection" ] || ! echo "$selection" | grep -qE '^[0-9]+$' || [ "$selection" -lt 1 ] || [ "$selection" -gt "$total" ]; then
         echo -e "  ${RED}Selecao invalida.${NC}"
         return 1
     fi
@@ -321,12 +338,12 @@ execute_iso() {
     local fname=$(basename "$iso_file")
 
     echo ""
-    echo -e "  ${WHITE}O que deseja fazer com a ISO?${NC}"
+    echo -e "  ${WHITE}O que deseja fazer com a ISO ${CYAN}${fname}${WHITE}?${NC}"
     echo ""
     echo -e "  ${WHITE}[1]${NC} ${CYAN}Instalar no disco do notebook${NC} (gravar ISO no HD/SSD)"
     echo -e "  ${WHITE}[2]${NC} ${CYAN}Iniciar sistema da ISO${NC} (kexec - boot direto)"
     echo -e "  ${WHITE}[3]${NC} ${CYAN}Montar e explorar${NC} (ver conteudo da ISO)"
-    echo -e "  ${WHITE}[4]${NC} ${CYAN}Transferir outra ISO${NC}"
+    echo -e "  ${WHITE}[4]${NC} ${CYAN}Voltar ao menu principal${NC}"
     echo -e "  ${WHITE}[5]${NC} ${CYAN}Sair${NC}"
     echo ""
     echo -e "  ${WHITE}Escolha [1-5]: ${NC}"
@@ -541,76 +558,402 @@ unmount_phone() {
 }
 
 # ======================
+# ISO Download Functions
+# ======================
+
+check_network() {
+    echo -e "  ${YELLOW}Verificando conexao com a internet...${NC}"
+
+    # Try to configure network via DHCP if not already up
+    if ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}Configurando rede...${NC}"
+        for iface in eth0 enp0s3 wlan0 ens33 enp0s25; do
+            if [ -d "/sys/class/net/$iface" ]; then
+                dhclient "$iface" 2>/dev/null || dhcpcd "$iface" 2>/dev/null || udhcpc -i "$iface" 2>/dev/null
+            fi
+        done
+        sleep 2
+    fi
+
+    if ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓ Conexao com a internet OK!${NC}"
+        log "Network OK"
+        return 0
+    else
+        echo -e "  ${RED}✗ Sem conexao com a internet.${NC}"
+        echo -e "  ${WHITE}Conecte um cabo de rede ao notebook ou configure o WiFi.${NC}"
+        log "Network check failed"
+        return 1
+    fi
+}
+
+show_download_catalog() {
+    clear_screen
+    echo -e "  ${WHITE}${BOLD}Sistemas disponiveis para download:${NC}"
+    echo ""
+
+    local count=0
+    for entry in "${ISO_CATALOG[@]}"; do
+        count=$((count + 1))
+        local name
+        name=$(echo "$entry" | cut -d'|' -f1)
+        echo -e "  ${WHITE}[$count]${NC} ${CYAN}$name${NC}"
+    done
+
+    echo ""
+    echo -e "  ${WHITE}[$((count + 1))]${NC} ${CYAN}Digitar URL manualmente${NC}"
+    echo -e "  ${WHITE}[0]${NC}  ${CYAN}Voltar ao menu principal${NC}"
+    echo ""
+    echo -e "  ${WHITE}Escolha o sistema [0-$((count + 1))]: ${NC}"
+    read -r selection
+
+    if [ "$selection" = "0" ]; then
+        return 1
+    fi
+
+    local total=${#ISO_CATALOG[@]}
+
+    if [ "$selection" = "$((total + 1))" ]; then
+        echo ""
+        echo -e "  ${WHITE}Digite a URL completa da ISO:${NC}"
+        echo -e "  ${CYAN}Exemplo: https://example.com/sistema.iso${NC}"
+        echo ""
+        echo -e "  ${WHITE}URL: ${NC}"
+        read -r DOWNLOAD_URL
+        if [ -z "$DOWNLOAD_URL" ]; then
+            echo -e "  ${RED}URL vazia.${NC}"
+            sleep 2
+            return 1
+        fi
+        DOWNLOAD_NAME="custom-iso"
+        DOWNLOAD_SIZE="0"
+        return 0
+    fi
+
+    if [ -z "$selection" ] || ! echo "$selection" | grep -qE '^[0-9]+$' || [ "$selection" -lt 1 ] || [ "$selection" -gt "$total" ]; then
+        echo -e "  ${RED}Selecao invalida.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    local entry="${ISO_CATALOG[$((selection - 1))]}"
+    DOWNLOAD_NAME=$(echo "$entry" | cut -d'|' -f1)
+    DOWNLOAD_URL=$(echo "$entry" | cut -d'|' -f2)
+    DOWNLOAD_SIZE=$(echo "$entry" | cut -d'|' -f3)
+
+    log "Selected for download: $DOWNLOAD_NAME ($DOWNLOAD_URL)"
+    return 0
+}
+
+download_iso() {
+    local url="$DOWNLOAD_URL"
+    local fname
+    fname=$(basename "$url")
+
+    if [ -z "$fname" ] || [ "$fname" = "/" ]; then
+        fname="downloaded-system.iso"
+    fi
+
+    # Ensure .iso extension
+    case "$fname" in
+        *.iso) ;;
+        *) fname="${fname}.iso" ;;
+    esac
+
+    local dest="$ISO_DIR/$fname"
+
+    clear_screen
+    echo -e "  ${WHITE}${BOLD}Baixando ISO da internet...${NC}"
+    echo ""
+    echo -e "  ${CYAN}Sistema:${NC} $DOWNLOAD_NAME"
+    echo -e "  ${CYAN}URL:${NC} $url"
+    echo -e "  ${CYAN}Tamanho aprox.:${NC} $DOWNLOAD_SIZE"
+    echo ""
+
+    # Get the file size via HEAD request
+    local total_size=0
+    if command -v wget >/dev/null 2>&1; then
+        total_size=$(wget --spider --server-response "$url" 2>&1 | grep -i "Content-Length" | tail -1 | awk '{print $2}' | tr -d '\r')
+    elif command -v curl >/dev/null 2>&1; then
+        total_size=$(curl -sI "$url" 2>&1 | grep -i "content-length" | tail -1 | awk '{print $2}' | tr -d '\r')
+    fi
+
+    # Fallback: estimate from catalog size
+    if [ -z "$total_size" ] || [ "$total_size" = "0" ]; then
+        local size_num
+        size_num=$(echo "$DOWNLOAD_SIZE" | sed 's/[^0-9]//g')
+        if [ -n "$size_num" ] && [ "$size_num" -gt 0 ] 2>/dev/null; then
+            total_size=$((size_num * 1048576))
+        fi
+    fi
+
+    local start_time
+    start_time=$(date +%s)
+
+    echo -e "  ${YELLOW}Iniciando download...${NC}"
+    echo ""
+
+    # Download in background
+    if command -v wget >/dev/null 2>&1; then
+        wget -q -O "$dest" "$url" 2>/dev/null &
+    elif command -v curl >/dev/null 2>&1; then
+        curl -sL -o "$dest" "$url" 2>/dev/null &
+    else
+        echo -e "  ${RED}Erro: wget ou curl nao encontrado!${NC}"
+        log "No download tool available"
+        return 1
+    fi
+    local dl_pid=$!
+
+    # Monitor progress
+    while kill -0 "$dl_pid" 2>/dev/null; do
+        if [ -f "$dest" ]; then
+            local current_size
+            current_size=$(stat -c%s "$dest" 2>/dev/null || echo "0")
+            if [ "$total_size" -gt 0 ] 2>/dev/null; then
+                show_progress "$current_size" "$total_size" "$start_time"
+            else
+                local dl_mb
+                dl_mb=$(awk "BEGIN {printf \"%.1f\", $current_size / 1048576}")
+                local now
+                now=$(date +%s)
+                local elapsed=$((now - start_time))
+                local speed_mb="0.0"
+                if [ "$elapsed" -gt 0 ]; then
+                    speed_mb=$(awk "BEGIN {printf \"%.1f\", $current_size / $elapsed / 1048576}")
+                fi
+                printf "\r  ${GREEN}Baixando...${NC} ${CYAN}${dl_mb} MB${NC}  ${YELLOW}${speed_mb} MB/s${NC}  ${WHITE}(${elapsed}s)${NC}   "
+            fi
+        fi
+        sleep 1
+    done
+
+    wait "$dl_pid"
+    local exit_code=$?
+
+    echo ""
+
+    if [ "$exit_code" -eq 0 ] && [ -f "$dest" ]; then
+        local final_size
+        final_size=$(stat -c%s "$dest" 2>/dev/null || echo "0")
+
+        if [ "$final_size" -gt 0 ]; then
+            local end_time
+            end_time=$(date +%s)
+            local total_time=$((end_time - start_time))
+            local minutes=$((total_time / 60))
+            local seconds=$((total_time % 60))
+            local final_mb
+            final_mb=$(awk "BEGIN {printf \"%.1f\", $final_size / 1048576}")
+
+            if [ "$total_size" -gt 0 ] 2>/dev/null; then
+                show_progress "$final_size" "$final_size" "$start_time"
+            fi
+
+            echo ""
+            echo ""
+            echo -e "  ${GREEN}╔══════════════════════════════════════════════╗${NC}"
+            echo -e "  ${GREEN}║  ✓ Download concluido com sucesso!          ║${NC}"
+            echo -e "  ${GREEN}╚══════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "  ${WHITE}Tamanho:${NC} ${final_mb} MB"
+            echo -e "  ${WHITE}Tempo total:${NC} ${minutes}m ${seconds}s"
+            echo -e "  ${WHITE}Arquivo:${NC} $dest"
+            log "Download completed: $fname ($final_mb MB) in ${minutes}m${seconds}s"
+
+            DOWNLOADED_ISO="$dest"
+            return 0
+        fi
+    fi
+
+    echo -e "  ${RED}✗ Erro no download!${NC}"
+    echo -e "  ${WHITE}Verifique a URL e a conexao com a internet.${NC}"
+    rm -f "$dest"
+    log "Download failed for $url"
+    return 1
+}
+
+show_local_isos() {
+    clear_screen
+    echo -e "  ${WHITE}${BOLD}ISOs disponiveis localmente:${NC}"
+    echo ""
+
+    local iso_files
+    iso_files=$(find "$ISO_DIR" -iname "*.iso" -type f 2>/dev/null)
+
+    if [ -z "$iso_files" ]; then
+        echo -e "  ${YELLOW}Nenhuma ISO encontrada.${NC}"
+        echo -e "  ${WHITE}Baixe ou receba uma ISO primeiro.${NC}"
+        echo ""
+        echo -e "  ${WHITE}Pressione ENTER para voltar...${NC}"
+        read -r
+        return 1
+    fi
+
+    local count=0
+    echo "$iso_files" | while IFS= read -r file; do
+        count=$((count + 1))
+        local fname
+        fname=$(basename "$file")
+        local fsize
+        fsize=$(stat -c%s "$file" 2>/dev/null || echo "0")
+        local fsize_mb
+        fsize_mb=$(awk "BEGIN {printf \"%.1f\", $fsize / 1048576}")
+        echo -e "  ${WHITE}[$count]${NC} ${CYAN}$fname${NC} ${YELLOW}(${fsize_mb} MB)${NC}"
+    done
+
+    echo "$iso_files" > /tmp/local_iso_list.txt
+    local total
+    total=$(echo "$iso_files" | wc -l)
+
+    echo ""
+    echo -e "  ${WHITE}[0]${NC} Voltar ao menu principal"
+    echo ""
+    echo -e "  ${WHITE}Escolha uma ISO [0-$total]: ${NC}"
+    read -r selection
+
+    if [ "$selection" = "0" ] || [ -z "$selection" ]; then
+        return 1
+    fi
+
+    if ! echo "$selection" | grep -qE '^[0-9]+$' || [ "$selection" -lt 1 ] || [ "$selection" -gt "$total" ]; then
+        echo -e "  ${RED}Selecao invalida.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    local selected
+    selected=$(sed -n "${selection}p" /tmp/local_iso_list.txt)
+    if [ -n "$selected" ]; then
+        while true; do
+            if ! execute_iso "$selected"; then
+                break
+            fi
+        done
+    fi
+    return 0
+}
+
+# ======================
+# Flow Functions
+# ======================
+
+flow_download() {
+    if ! check_network; then
+        echo ""
+        echo -e "  ${WHITE}Pressione ENTER para voltar...${NC}"
+        read -r
+        return
+    fi
+
+    if ! show_download_catalog; then
+        return
+    fi
+
+    if download_iso; then
+        while true; do
+            if ! execute_iso "$DOWNLOADED_ISO"; then
+                break
+            fi
+        done
+    else
+        echo ""
+        echo -e "  ${WHITE}Pressione ENTER para voltar...${NC}"
+        read -r
+    fi
+}
+
+flow_phone_transfer() {
+    if ! detect_phone; then
+        echo -e "\n  ${WHITE}Pressione ENTER para voltar...${NC}"
+        read -r
+        return
+    fi
+
+    if ! mount_phone; then
+        echo -e "\n  ${WHITE}Pressione ENTER para voltar...${NC}"
+        read -r
+        return
+    fi
+
+    if ! find_iso_files; then
+        unmount_phone
+        echo -e "\n  ${WHITE}Pressione ENTER para voltar...${NC}"
+        read -r
+        return
+    fi
+
+    if transfer_iso "$SELECTED_ISO"; then
+        unmount_phone
+        local received_iso="$ISO_DIR/$(basename "$SELECTED_ISO")"
+        while true; do
+            if ! execute_iso "$received_iso"; then
+                break
+            fi
+        done
+    else
+        unmount_phone
+        echo ""
+        echo -e "  ${WHITE}Pressione ENTER para voltar...${NC}"
+        read -r
+    fi
+}
+
+# ======================
 # Main Program Flow
 # ======================
 
+show_main_menu() {
+    clear_screen
+    echo -e "  ${WHITE}${BOLD}Como deseja obter a ISO?${NC}"
+    echo ""
+    echo -e "  ${WHITE}[1]${NC} ${GREEN}Baixar da internet${NC}      - Escolha um sistema e baixe direto"
+    echo -e "  ${WHITE}[2]${NC} ${GREEN}Receber do celular${NC}      - Envie a ISO do celular via cabo USB"
+    echo -e "  ${WHITE}[3]${NC} ${GREEN}ISOs ja baixadas${NC}        - Ver ISOs que ja foram baixadas/recebidas"
+    echo -e "  ${WHITE}[4]${NC} ${RED}Desligar${NC}"
+    echo ""
+    echo -e "  ${WHITE}Escolha [1-4]: ${NC}"
+    read -r menu_choice
+    echo "$menu_choice"
+}
+
 main() {
     clear_screen
-    echo -e "  ${WHITE}Bem-vindo ao ISO Receiver!${NC}"
+    echo -e "  ${WHITE}Bem-vindo ao ${CYAN}ISO Receiver${WHITE}!${NC}"
     echo ""
-    echo -e "  ${WHITE}Este sistema permite receber arquivos ISO${NC}"
-    echo -e "  ${WHITE}do seu celular via cabo USB e instalar no notebook.${NC}"
+    echo -e "  ${WHITE}Este sistema permite baixar ou receber arquivos ISO${NC}"
+    echo -e "  ${WHITE}e instalar sistemas operacionais no notebook.${NC}"
     echo ""
     echo -e "  ${WHITE}Pressione ENTER para iniciar...${NC}"
     read -r
 
     while true; do
-        # Step 1: Detect phone
-        if ! detect_phone; then
-            echo -e "\n  ${WHITE}Tentar novamente? [s/N]: ${NC}"
-            read -r retry
-            if [ "$retry" = "s" ] || [ "$retry" = "S" ]; then
-                continue
-            else
-                break
-            fi
-        fi
+        local choice
+        choice=$(show_main_menu)
 
-        # Step 2: Mount phone storage
-        if ! mount_phone; then
-            echo -e "\n  ${WHITE}Tentar novamente? [s/N]: ${NC}"
-            read -r retry
-            if [ "$retry" = "s" ] || [ "$retry" = "S" ]; then
-                continue
-            else
-                break
-            fi
-        fi
-
-        # Step 3: Find and select ISO
-        if ! find_iso_files; then
-            unmount_phone
-            echo -e "\n  ${WHITE}Tentar novamente? [s/N]: ${NC}"
-            read -r retry
-            if [ "$retry" = "s" ] || [ "$retry" = "S" ]; then
-                continue
-            else
-                break
-            fi
-        fi
-
-        # Step 4: Transfer ISO
-        if ! transfer_iso "$SELECTED_ISO"; then
-            unmount_phone
-            continue
-        fi
-
-        unmount_phone
-
-        # Step 5: Execute/Install ISO
-        local received_iso="$ISO_DIR/$(basename "$SELECTED_ISO")"
-        while true; do
-            if ! execute_iso "$received_iso"; then
-                break  # Go back to transfer
-            fi
-        done
+        case "$choice" in
+            1)
+                flow_download
+                ;;
+            2)
+                flow_phone_transfer
+                ;;
+            3)
+                show_local_isos
+                ;;
+            4)
+                echo -e "\n  ${GREEN}Obrigado por usar o ISO Receiver!${NC}"
+                echo -e "  ${WHITE}Desligando...${NC}"
+                sleep 2
+                poweroff 2>/dev/null || true
+                exit 0
+                ;;
+            *)
+                echo -e "  ${RED}Opcao invalida.${NC}"
+                sleep 1
+                ;;
+        esac
     done
-
-    echo ""
-    echo -e "  ${GREEN}Obrigado por usar o ISO Receiver!${NC}"
-    echo -e "  ${WHITE}Pressione ENTER para desligar...${NC}"
-    read -r
-    poweroff 2>/dev/null || true
 }
 
 # Trap cleanup
