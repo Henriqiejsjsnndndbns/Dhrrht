@@ -1266,8 +1266,7 @@ show_main_menu() {
     echo -e "  ${WHITE}[5]${NC} ${RED}Desligar${NC}"
     echo ""
     echo -e "  ${WHITE}Escolha [1-5]: ${NC}"
-    read -r menu_choice
-    echo "$menu_choice"
+    read -r MENU_CHOICE
 }
 
 show_welcome() {
@@ -1294,10 +1293,10 @@ main() {
     show_welcome
 
     while true; do
-        local choice
-        choice=$(show_main_menu)
+        MENU_CHOICE=""
+        show_main_menu
 
-        case "$choice" in
+        case "$MENU_CHOICE" in
             1) flow_download ;;
             2) flow_phone_transfer ;;
             3) show_local_isos ;;

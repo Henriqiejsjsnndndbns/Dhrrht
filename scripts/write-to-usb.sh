@@ -69,7 +69,7 @@ if [ ! -b "$USB_DEV" ]; then
 fi
 
 # Safety check - don't write to system disk
-SYSTEM_DISK=$(mount | grep ' / ' | awk '{print $1}' | sed 's/[0-9]*$//')
+SYSTEM_DISK=$(mount | grep ' / ' | awk '{print $1}' | sed 's/p\?[0-9]*$//')
 if [ "$USB_DEV" = "$SYSTEM_DISK" ]; then
     echo -e "${RED}ERRO: Este e o disco do sistema! Operacao cancelada.${NC}"
     exit 1
