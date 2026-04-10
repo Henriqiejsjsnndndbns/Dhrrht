@@ -37,9 +37,9 @@ echo -e "${WHITE}Dispositivos USB disponiveis:${NC}"
 echo ""
 
 lsblk -d -n -o NAME,SIZE,MODEL,TRAN 2>/dev/null | grep "usb" | while read -r line; do
-    local name=$(echo "$line" | awk '{print $1}')
-    local size=$(echo "$line" | awk '{print $2}')
-    local model=$(echo "$line" | awk '{$1=""; $2=""; $NF=""; print $0}' | sed 's/^ *//' | sed 's/ *$//')
+    name=$(echo "$line" | awk '{print $1}')
+    size=$(echo "$line" | awk '{print $2}')
+    model=$(echo "$line" | awk '{$1=""; $2=""; $NF=""; print $0}' | sed 's/^ *//' | sed 's/ *$//')
     echo -e "  ${CYAN}/dev/$name${NC} - ${WHITE}$size${NC} $model"
 done
 
